@@ -1,44 +1,35 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import fs from 'fs/promises';
-import path from 'path';
+import { sql } from '@vercel/postgres';
 
 export const dynamic = 'force-dynamic';
-
-const dataFilePath = path.join(process.cwd(), 'src/app/data/projects.json');
-
-async function getProjects() {
-  try {
-    const data = await fs.readFile(dataFilePath, 'utf8');
-    return JSON.parse(data);
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      // Return empty array if file doesn't exist yet
-      return [];
-    }
-    throw error;
-  }
-}
-
-async function saveProjects(projects) {
-  await fs.writeFile(dataFilePath, JSON.stringify(projects, null, 2));
-}
-
-export async function GET() {
-  try {
-    const projects = await getProjects();
-    // Sort by newest by default
-    projects.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    return NextResponse.json(projects);
-  } catch (error) {
-    return NextResponse.json({ error: 'Failed to fetch projects' }, { status: 500 });
-  }
-}
-
 
 async function isAuthenticated() {
   const cookieStore = await cookies();
   return cookieStore.has('admin_authenticated');
+}
+
+// Helper to format DB row to Frontend expected format
+const formatProject = (row) => ({
+  id: row.id,
+  name: row.title,
+  description: row.description,
+  url: row.link,
+  category: row.category,
+  tags: row.tags || [],
+  preview: row.image_url,
+  createdAt: row.created_at,
+});
+
+export async function GET() {
+  try {
+    const { rows } = await sql`SELECT * FROM projects ORDER BY created_at DESC`;
+    const projects = rows.map(formatProject);
+    return NextResponse.json(projects);
+  } catch (error) {
+    console.error('Database Error:', error);
+    return NextResponse.json({ error: 'Failed to fetch projects' }, { status: 500 });
+  }
 }
 
 export async function POST(request) {
@@ -48,19 +39,30 @@ export async function POST(request) {
 
   try {
     const body = await request.json();
-    const projects = await getProjects();
+    const { name, description, url, category, preview, tags } = body;
+    const id = Date.now().toString();
+    const createdAt = new Date().toISOString();
 
-    const newProject = {
-      id: Date.now().toString(),
-      createdAt: new Date().toISOString(),
-      ...body,
-    };
+    // Ensure tags is an array
+    const tagsArray = Array.isArray(tags) ? tags : [];
 
-    projects.push(newProject);
-    await saveProjects(projects);
+    await sql`
+      INSERT INTO projects (id, title, description, link, category, image_url, tags, created_at)
+      VALUES (${id}, ${name}, ${description}, ${url}, ${category}, ${preview}, ${tagsArray}, ${createdAt})
+    `;
 
-    return NextResponse.json(newProject, { status: 201 });
+    return NextResponse.json({
+      id,
+      name,
+      description,
+      url,
+      category,
+      preview,
+      tags: tagsArray,
+      createdAt
+    }, { status: 201 });
   } catch (error) {
+    console.error('Database Error:', error);
     return NextResponse.json({ error: 'Failed to create project' }, { status: 500 });
   }
 }
@@ -72,22 +74,27 @@ export async function PUT(request) {
 
   try {
     const body = await request.json();
-    const { id, ...updates } = body;
+    const { id, name, description, url, category, preview, tags } = body;
 
-    let projects = await getProjects();
-    const index = projects.findIndex(p => p.id === id);
+    if (!id) return NextResponse.json({ error: 'ID required' }, { status: 400 });
 
-    if (index === -1) {
-      return NextResponse.json({ error: 'Project not found' }, { status: 404 });
-    }
+    const tagsArray = Array.isArray(tags) ? tags : [];
 
-    // Update fields
-    projects[index] = { ...projects[index], ...updates };
+    await sql`
+      UPDATE projects 
+      SET title = ${name}, 
+          description = ${description}, 
+          link = ${url}, 
+          category = ${category}, 
+          image_url = ${preview},
+          tags = ${tagsArray}
+      WHERE id = ${id}
+    `;
 
-    await saveProjects(projects);
-
-    return NextResponse.json(projects[index]);
+    // Return the updated object
+    return NextResponse.json({ id, name, description, url, category, preview, tags: tagsArray });
   } catch (error) {
+    console.error('Database Error:', error);
     return NextResponse.json({ error: 'Failed to update project' }, { status: 500 });
   }
 }
@@ -105,18 +112,15 @@ export async function DELETE(request) {
       return NextResponse.json({ error: 'ID is required' }, { status: 400 });
     }
 
-    let projects = await getProjects();
-    const initialLength = projects.length;
-    projects = projects.filter(p => p.id !== id);
+    const result = await sql`DELETE FROM projects WHERE id = ${id}`;
 
-    if (projects.length === initialLength) {
+    if (result.rowCount === 0) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 });
     }
 
-    await saveProjects(projects);
-
     return NextResponse.json({ success: true });
   } catch (error) {
+    console.error('Database Error:', error);
     return NextResponse.json({ error: 'Failed to delete project' }, { status: 500 });
   }
 }
