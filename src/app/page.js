@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import FilterBar from '@/components/FilterBar';
@@ -14,8 +14,8 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
 
   // Filter states
-  const [sortOrder, setSortOrder] = useState('newest'); // newest, oldest
-  const [filterType, setFilterType] = useState('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTags, setSelectedTags] = useState([]);
 
   const router = useRouter();
 
@@ -26,15 +26,33 @@ export default function Home() {
 
   useEffect(() => {
     applyFilters();
-  }, [projects, sortOrder, filterType]);
+  }, [projects, searchQuery, selectedTags]);
+
+  // Derive unique tags from all projects
+  const availableTags = useMemo(() => {
+    const tags = new Set();
+    projects.forEach(p => {
+      if (p.tags && Array.isArray(p.tags)) {
+        p.tags.forEach(t => tags.add(t));
+      }
+    });
+    return Array.from(tags).sort();
+  }, [projects]);
 
   const fetchProjects = async () => {
     try {
       const res = await fetch('/api/projects', { cache: 'no-store' });
       const data = await res.json();
-      setProjects(data);
+
+      if (Array.isArray(data)) {
+        setProjects(data);
+      } else {
+        console.error('API returned non-array:', data);
+        setProjects([]);
+      }
     } catch (error) {
       console.error('Failed to fetch projects', error);
+      setProjects([]);
     } finally {
       setLoading(false);
     }
@@ -53,25 +71,37 @@ export default function Home() {
   const applyFilters = () => {
     let result = [...projects];
 
-    // Filter
-    if (filterType !== 'All') {
-      result = result.filter(p => p.category === filterType);
+    // Filter by Search Query (Name or Description)
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(p =>
+        p.name.toLowerCase().includes(query) ||
+        (p.description && p.description.toLowerCase().includes(query))
+      );
     }
 
-    // Sort
-    result.sort((a, b) => {
-      const dateA = new Date(a.createdAt);
-      const dateB = new Date(b.createdAt);
-      return sortOrder === 'newest' ? dateB - dateA : dateA - dateB;
-    });
+    // Filter by Tags
+    if (selectedTags.length > 0) {
+      result = result.filter(p =>
+        p.tags && selectedTags.every(t => p.tags.includes(t))
+      );
+    }
 
+    // Note: Order is preserved from API (Rank ASC)
     setFilteredProjects(result);
+  };
+
+  const toggleTag = (tag) => {
+    setSelectedTags(prev =>
+      prev.includes(tag)
+        ? prev.filter(t => t !== tag)
+        : [...prev, tag]
+    );
   };
 
   const handleToggleAdmin = () => {
     if (isAdmin) {
-      // Optional: Logout logic here if clicking the button again
-      // For now, let's just keep it simple or maybe redirect to login if not logged in
+      router.push('/login'); // Or logout logic
     } else {
       router.push('/login');
     }
@@ -134,31 +164,24 @@ export default function Home() {
     }
   };
 
-  const handleSort = () => {
-    setSortOrder(prev => prev === 'newest' ? 'oldest' : 'newest');
-  };
-
-  const handleFilter = () => {
-    // Simple toggle for demo, could be a dropdown
-    const types = ['All', 'Web', 'App', 'Media', 'Experimental'];
-    const currentIndex = types.indexOf(filterType);
-    const nextIndex = (currentIndex + 1) % types.length;
-    setFilterType(types[nextIndex]);
-  };
-
   return (
     <>
       <Header />
       <main className="container">
         <FilterBar
-          onSort={handleSort}
-          onFilter={handleFilter}
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          selectedTags={selectedTags}
+          toggleTag={toggleTag}
+          availableTags={availableTags}
           onToggleAdmin={isAdmin ? handleLogout : handleToggleAdmin}
           isAdmin={isAdmin}
         />
 
         <div style={{ paddingBottom: '16px', fontSize: '13px', color: 'var(--muted)' }}>
-          Showing: <strong>{filterType}</strong> · Sort: <strong>{sortOrder}</strong>
+          {searchQuery && <span>Searching: <strong>{searchQuery}</strong> </span>}
+          {selectedTags.length > 0 && <span>Tags: <strong>{selectedTags.join(', ')}</strong></span>}
+          {!searchQuery && selectedTags.length === 0 && <span>All Projects</span>}
         </div>
 
         {loading ? (

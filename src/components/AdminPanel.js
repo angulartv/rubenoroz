@@ -1,9 +1,84 @@
-import { useState } from 'react';
-import { Trash2, Plus, Edit2, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Trash2, Plus, Edit2, X, GripVertical } from 'lucide-react';
+import {
+    DndContext,
+    closestCenter,
+    KeyboardSensor,
+    PointerSensor,
+    useSensor,
+    useSensors,
+} from '@dnd-kit/core';
+import {
+    arrayMove,
+    SortableContext,
+    sortableKeyboardCoordinates,
+    verticalListSortingStrategy,
+    useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+
+// Sortable Item Component
+function SortableItem(props) {
+    const {
+        attributes,
+        listeners,
+        setNodeRef,
+        transform,
+        transition,
+    } = useSortable({ id: props.id });
+
+    const style = {
+        transform: CSS.Transform.toString(transform),
+        transition,
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: '10px',
+        fontSize: '13px',
+        background: '#fff',
+        border: '1px solid var(--border)',
+        borderRadius: '6px',
+        padding: '8px 12px',
+        touchAction: 'none' // Important for pointer events
+    };
+
+    return (
+        <li ref={setNodeRef} style={style} {...attributes}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div {...listeners} style={{ cursor: 'grab', color: 'var(--muted)' }}>
+                    <GripVertical size={14} />
+                </div>
+                <span style={{ fontWeight: props.isEditing ? 'bold' : 'normal' }}>{props.name}</span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                    type="button"
+                    onClick={props.onEdit}
+                    style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: '4px' }}
+                >
+                    <Edit2 size={14} />
+                </button>
+                <button
+                    type="button"
+                    onClick={props.onDelete}
+                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px' }}
+                >
+                    <Trash2 size={14} />
+                </button>
+            </div>
+        </li>
+    );
+}
 
 export default function AdminPanel({ projects, onAdd, onUpdate, onDelete }) {
     const [isEditing, setIsEditing] = useState(false);
     const [editId, setEditId] = useState(null);
+    const [orderedProjects, setOrderedProjects] = useState([]);
+
+    // Sync local state with props
+    useEffect(() => {
+        setOrderedProjects(projects);
+    }, [projects]);
 
     const [formData, setFormData] = useState({
         name: '',
@@ -13,6 +88,42 @@ export default function AdminPanel({ projects, onAdd, onUpdate, onDelete }) {
         tags: '',
         preview: ''
     });
+
+    const sensors = useSensors(
+        useSensor(PointerSensor),
+        useSensor(KeyboardSensor, {
+            coordinateGetter: sortableKeyboardCoordinates,
+        })
+    );
+
+    const handleDragEnd = async (event) => {
+        const { active, over } = event;
+
+        if (active.id !== over.id) {
+            setOrderedProjects((items) => {
+                const oldIndex = items.findIndex(item => item.id === active.id);
+                const newIndex = items.findIndex(item => item.id === over.id);
+                const newItems = arrayMove(items, oldIndex, newIndex);
+
+                // Trigger API update
+                saveReorder(newItems);
+
+                return newItems;
+            });
+        }
+    };
+
+    const saveReorder = async (items) => {
+        try {
+            await fetch('/api/projects/reorder', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items: items.map(p => ({ id: p.id })) })
+            });
+        } catch (error) {
+            console.error('Failed to save order', error);
+        }
+    };
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -123,30 +234,31 @@ export default function AdminPanel({ projects, onAdd, onUpdate, onDelete }) {
             </form>
 
             <div style={{ marginTop: '30px', borderTop: '1px solid var(--border)', paddingTop: '20px' }}>
-                <h4 style={{ margin: '0 0 15px 0' }}>Manage Existing</h4>
-                <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                    {projects.map(p => (
-                        <li key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', fontSize: '13px' }}>
-                            <span style={{ fontWeight: isEditing && editId === p.id ? 'bold' : 'normal' }}>{p.name}</span>
-                            <div style={{ display: 'flex', gap: '8px' }}>
-                                <button
-                                    type="button"
-                                    onClick={() => startEdit(p)}
-                                    style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: '4px' }}
-                                >
-                                    <Edit2 size={14} />
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => onDelete(p.id)}
-                                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px' }}
-                                >
-                                    <Trash2 size={14} />
-                                </button>
-                            </div>
-                        </li>
-                    ))}
-                </ul>
+                <h4 style={{ margin: '0 0 15px 0' }}>Manage Existing (Drag to Reorder)</h4>
+
+                <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleDragEnd}
+                >
+                    <SortableContext
+                        items={orderedProjects.map(p => p.id)}
+                        strategy={verticalListSortingStrategy}
+                    >
+                        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                            {orderedProjects.map(p => (
+                                <SortableItem
+                                    key={p.id}
+                                    id={p.id}
+                                    name={p.name}
+                                    isEditing={isEditing && editId === p.id}
+                                    onEdit={() => startEdit(p)}
+                                    onDelete={() => onDelete(p.id)}
+                                />
+                            ))}
+                        </ul>
+                    </SortableContext>
+                </DndContext>
             </div>
         </div>
     );

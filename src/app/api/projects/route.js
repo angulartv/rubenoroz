@@ -17,13 +17,15 @@ const formatProject = (row) => ({
   url: row.link,
   category: row.category,
   tags: row.tags || [],
+  rank: row.rank || 0,
   preview: row.image_url,
   createdAt: row.created_at,
 });
 
 export async function GET() {
   try {
-    const { rows } = await sql`SELECT * FROM projects ORDER BY created_at DESC`;
+    // Sort by rank ascending (0, 1, 2...), then by date descending as fallback
+    const { rows } = await sql`SELECT * FROM projects ORDER BY rank ASC, created_at DESC`;
     const projects = rows.map(formatProject);
     return NextResponse.json(projects);
   } catch (error) {
@@ -46,9 +48,13 @@ export async function POST(request) {
     // Ensure tags is an array
     const tagsArray = Array.isArray(tags) ? tags : [];
 
+    // Get max rank to append to end
+    const { rows: maxRankRows } = await sql`SELECT MAX(rank) as max_rank FROM projects`;
+    const nextRank = (maxRankRows[0]?.max_rank || 0) + 1;
+
     await sql`
-      INSERT INTO projects (id, title, description, link, category, image_url, tags, created_at)
-      VALUES (${id}, ${name}, ${description}, ${url}, ${category}, ${preview}, ${tagsArray}, ${createdAt})
+      INSERT INTO projects (id, title, description, link, category, image_url, tags, rank, created_at)
+      VALUES (${id}, ${name}, ${description}, ${url}, ${category}, ${preview}, ${tagsArray}, ${nextRank}, ${createdAt})
     `;
 
     return NextResponse.json({
@@ -59,6 +65,7 @@ export async function POST(request) {
       category,
       preview,
       tags: tagsArray,
+      rank: nextRank,
       createdAt
     }, { status: 201 });
   } catch (error) {
